@@ -1,0 +1,12 @@
+---
+title: "assignment3A"
+author: "xiaofei"
+format: html
+editor: visual
+---
+
+## Approach
+
+After reading the assignment requirement, I've learned that Global Baseline Estimate is one of the best non-personalized recommender system alghrithms. My plan is to first set up connection from my PostgreSQL database, load movie rating data in R, and implement Global Baseline Estimate Algorithm, generate recommendations, get result such as top recommendations for each user.
+
+Difficulties that I'm anticipating is specific steps that I need to do in order to implement Global Baseline Estimate Algorithm, but I'm looking forward to learn a lot from this project.
