@@ -7,13 +7,11 @@ editor: visual
 
 ## Approach
 
-After reading the assignment requirement, I've learned that Global Baseline Estimate is one of the best non-personalized recommender system algorithms. My plan is to first set up connection from my PostgreSQL database, load movie rating data in R, and implement Global Baseline Estimate Algorithm, generate recommendations, get result such as top recommendations for each user.
-
-Difficulties that I'm anticipating is specific steps that I need to do in order to implement Global Baseline Estimate Algorithm, but I'm looking forward to learn a lot from this project.
+After reading the assignment requirement, I've learned that Global Baseline Estimate is one of the best non-personalized recommender system algorithms. My plan is to first set up connection from my PostgreSQL database, load movie rating data in Rstudio, and implement the Global Baseline Estimate algorithm, generate recommendations, get result such as top recommendations for each user.
 
 ## Load and Explore Movie Ratings Data
 
-Establish connection with ProstgresSQL database, and load data. For movie recommender, we don’t typically need to impute the missing data since we will be predict and provide recommended score for unseen movies. From the result showing below looks like data are successfully loaded from database in R with columns: u.user_id, u.name, m.movie_id, m.title, m.genre, r.rating. we are ready for next step - calculating Global Baseline Estimates.
+Establish connection with ProstgresSQL database and load data. For movie recommender, we don’t typically need to impute the missing data since we will be predict and provide recommended score for unseen movies. From the result showing below, looks like data are successfully loaded from database in R with columns: u.user_id, u.name, m.movie_id, m.title, m.genre, r.rating. We are ready for next step - calculating Global Baseline estimates.
 
 ```{r}
 library(DBI)
@@ -60,6 +58,8 @@ head(movie_ratings)
 
 For global baseline estimate, we will need 3 parts: user bias, movie bias, and movie average ratings. with mathematical formula: b_ui = μ + b_u + b_i. which μ is the overall average rating, b_u is the user bias (user's average deviation from global mean), and b_i is the movie bias (movie's average deviation from global mean).
 
+First we get a glabale mean of the movie without NA values, which will be our base line for calculation. then each user's personal average rating were calculated. We subtracts the global mean from user's mean to get user bias, could be positive or negative. Similarly we get movie_bais which could be a positive or negative number. With above information, we will be ready to make prediction using the formula.
+
 ```{r}
 global_mean <- mean(movie_ratings$rating, na.rm = TRUE)
 cat("Global Mean Rating (μ):", global_mean, "\n")
@@ -89,7 +89,9 @@ movie_biases <- movie_ratings |>
 head(movie_biases)
 ```
 
-## Prediction 
+## Prediction
+
+To use Global Baseline Estimate algorithm, we pass in 5 variable to the function: user_ID, movie_id, global_mean, user_biases and movie_biases. It will search and pull for user_id and movie_bias from user_bias and movie_bias info we prepared from above code.
 
 ```{r}
 predict_rating <- function(user_id, movie_id, global_mean, user_biases, movie_biases) {
@@ -110,7 +112,9 @@ predict_rating <- function(user_id, movie_id, global_mean, user_biases, movie_bi
 }
 ```
 
-## Creating Recommendations 
+## Creating Recommendations
+
+Recommendation function takes a target user and generate top recommendations by predicting rating for all movies the user hasn't seen yet, and sort result by predicted ratings.
 
 ```{r}
 
@@ -121,19 +125,18 @@ get_recommendations <- function(target_user_id, movie_ratings, user_biases, movi
     filter(user_id == target_user_id) |>
     pull(movie_id)
   
-  # Get all unique movies
   all_movies <- unique(movie_ratings$movie_id)
   
-  # Find movies the user hasn't rated, haven't watched
+  # find unmatched movie - missing rating
   unrated_movies <- setdiff(all_movies, rated_movies)
   
-  # Create empty dataframe for predictions
+  # Create recommendation dataframe 
   recommendations <- data.frame(
     movie_id = integer(),
     predicted_rating = numeric()
   )
   
-  # Predict rating for each unrated movie
+  # Predict rating 
   for (mid in unrated_movies) {
     user_bias_row <- user_biases[user_biases$user_id == target_user_id, ]
     user_bias <- ifelse(nrow(user_bias_row) > 0, user_bias_row$user_bias[1], 0)
@@ -142,7 +145,7 @@ get_recommendations <- function(target_user_id, movie_ratings, user_biases, movi
     movie_bias <- ifelse(nrow(movie_bias_row) > 0, movie_bias_row$movie_bias[1], 0)
     
     pred <- global_mean + user_bias + movie_bias
-    pred <- max(1, min(5, pred))  # Clamp to 1-5 range
+    pred <- max(1, min(5, pred))  
     
     # Add to recommendations
     recommendations <- rbind(recommendations, 
@@ -150,7 +153,7 @@ get_recommendations <- function(target_user_id, movie_ratings, user_biases, movi
                                        predicted_rating = pred))
   }
   
-  # Sort by predicted rating
+  # Sort ratings
   recommendations <- recommendations[
     order(recommendations$predicted_rating, decreasing = TRUE), 
   ]
@@ -158,54 +161,72 @@ get_recommendations <- function(target_user_id, movie_ratings, user_biases, movi
   return(head(recommendations, n_recommendations))
 }
 
-print(user_recs)
-```
 
-##  Model Evaluation
+# Get recommendations for all 5 users
+all_users <- 1:5
+all_recommendations <- list()  
 
-To evaluate mode, we will split the rated movies into training and testing.
-
-```{r}
-# Split data into training and testing sets
-set.seed(123)  
-train_indices <- sample(1:nrow(movie_ratings), size = 0.8 * nrow(movie_ratings))
-train_data <- movie_ratings[train_indices, ]
-test_data <- movie_ratings[-train_indices, ]
-
-# Recalculate biases using training data only
-train_global_mean <- mean(train_data$rating, na.rm = TRUE)
-
-train_user_biases <- train_data |>
-  group_by(user_id) |>
-  summarise(user_bias = mean(rating, na.rm = TRUE) - train_global_mean)
-
-train_movie_biases <- train_data |>
-  group_by(movie_id) |>
-  summarise(movie_bias = mean(rating, na.rm = TRUE) - train_global_mean)
-
-# Predict on test set
-test_predictions <- test_data |>
-  rowwise() |>
-  mutate(
-    predicted_rating = predict_rating(
-      user_id, movie_id, train_global_mean, 
-      train_user_biases, train_movie_biases
-    )
-  ) |>
-  ungroup()
-
-# Calculate evaluation result
-evaluation <- test_predictions |>
-  summarise(
-    MAE = mean(abs(rating - predicted_rating), na.rm = TRUE),
-    RMSE = sqrt(mean((rating - predicted_rating)^2, na.rm = TRUE)),
-    Correlation = cor(rating, predicted_rating, use = "complete.obs")
+for (user_id in all_users) {
+ 
+  user_recs <- get_recommendations(
+    target_user_id = user_id,
+    movie_ratings = movie_ratings,
+    user_biases = user_biases,
+    movie_biases = movie_biases,
+    global_mean = global_mean,
+    n_recommendations = 2
   )
+  
+  user_recs$user_id <- user_id
+  
+  all_recommendations[[user_id]] <- user_recs
+}
 
-print(evaluation)
+# Combine all recommendations
+all_recommendations_df <- do.call(rbind, all_recommendations)
 
+# Reorder columns for better readability
+all_recommendations_df <- all_recommendations_df[, c("user_id", "movie_id", "predicted_rating")]
+
+# View results
+print(all_recommendations_df)
+all_recommendations_df <- do.call(rbind, all_recommendations)
+
+all_recommendations_df <- all_recommendations_df[, c("user_id", "movie_id", "predicted_rating")]
+
+# Round predicted ratings to 1 decimal places
+all_recommendations_df$predicted_rating <- round(all_recommendations_df$predicted_rating, 1)
+
+# Add a rank column
+all_recommendations_df <- all_recommendations_df[
+  order(all_recommendations_df$user_id, -all_recommendations_df$predicted_rating), 
+]
+all_recommendations_df$rank <- ave(1:nrow(all_recommendations_df), 
+                                   all_recommendations_df$user_id, 
+                                   FUN = seq_along)
+
+# Print in a nice format
+for (user in unique(all_recommendations_df$user_id)) {
+  cat("\n", rep("-", 40), "\n", sep = "")
+  cat("USER", user, "RECOMMENDATIONS")
+  cat("\n", rep("-", 40), "\n", sep = "")
+  
+  user_recs <- all_recommendations_df[all_recommendations_df$user_id == user, 
+                                      c("rank", "movie_id", "predicted_rating")]
+  
+  for (i in 1:nrow(user_recs)) {
+    cat(sprintf("  %d. Movie %d (predicted rating: %.2f)\n", 
+                user_recs$rank[i], 
+                user_recs$movie_id[i], 
+                user_recs$predicted_rating[i]))
+  }
+}
+
+dbDisconnect(con)
 ```
 
 ## Conclusion
 
-Tdf
+In simmary, we used global baseline estimate to predict user rating and provide movie recommendation for each user, implementation includes user_bias, movie_bias, and recommendation will be made to each user_id if that user didn't provide rating for the movie.
+
+Some after thoughts is we could evaluate prediction performance by withholding some already rated movies to do prediction and compare result with the actual rating give by user. I didn't do this part yet for this project due to relatively small size of the data set which probably are insufficiant to reflect the real performance of the model.
